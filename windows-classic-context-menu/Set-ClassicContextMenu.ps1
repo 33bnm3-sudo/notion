@@ -37,10 +37,4 @@ else {
 
 Write-Host "Restarting Explorer to apply the change..."
 Stop-Process -Name explorer -Force
-Start-Sleep -Milliseconds 800
 Start-Process explorer.exe
-
-# Force-redraw the desktop wallpaper so it doesn't sit on a black
-# screen while Explorer finishes reloading.
-Start-Sleep -Milliseconds 1500
-RUNDLL32.EXE user32.dll, UpdatePerUserSystemParameters

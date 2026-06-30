@@ -91,3 +91,5 @@ Write-Host "=== Done ===" -ForegroundColor Green
 Write-Host "Edge has been uninstalled where possible, and auto-reinstall has been blocked via policy."
 Write-Host "Note: WebView2 Runtime was intentionally left in place since other apps depend on it."
 Write-Host "A future major Windows feature update may still reinstall Edge - if that happens, just re-run this script."
+Write-Host ""
+Read-Host "Press Enter to close this window"

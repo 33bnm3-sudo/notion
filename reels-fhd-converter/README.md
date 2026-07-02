@@ -10,18 +10,19 @@
 
 ## 처리 파이프라인 (`convert_to_fhd`)
 
-1. `ffprobe`로 원본 해상도 확인 → 목표 해상도보다 작으면 업스케일을 막기 위해 에러 반환
+1. `ffprobe`로 원본 해상도 확인 → 가로가 세로보다 길면 가로(1920x1080), 아니면 세로(1080x1920)로 목표 해상도 자동 결정 → 원본이 그보다 작으면 업스케일을 막기 위해 에러 반환
 2. `hqdn3d` 디노이즈 — 폰카메라 근접샷(2m 이내)에서 흔한 저조도 노이즈 제거. 샤프닝보다 먼저 적용해야 노이즈가 같이 도드라지지 않음
 3. `scale` (Lanczos, 강제 스트레치) — 종횡비 유지 없이 목표 해상도로 그대로 늘림/줄임
 4. `unsharp` — 다운스케일로 흐려진 디테일을 살짝 복구
 5. `libx265`(H.265) 인코딩 — CRF 기반, 압축 효율 우선. 프레임레이트는 원본 그대로 유지(재인코딩 안 함)
 6. 오디오는 재인코딩 없이 원본 그대로 복사(`-c:a copy`)
 
+가로 영상과 세로 영상을 각각 따로 넣어도 파일마다 알아서 맞는 방향으로 처리됩니다. 호출하는 쪽에서 방향을 지정할 필요 없음.
+
 ## 옵션 (`ConvertOptions`)
 
 | 필드 | 설명 | 기본값 |
 |---|---|---|
-| `orientation` | `Vertical`(1080x1920, 기본) / `Horizontal`(1920x1080) | `Vertical` |
 | `crf` | 낮을수록 고화질·큰 용량. 18~28 권장 | `26` |
 | `preset` | x265 인코딩 프리셋. 압축 효율 우선이면 `slow`~`veryslow` (그만큼 느려짐) | `"slow"` |
 
@@ -33,15 +34,8 @@
 
 ```rust
 #[tauri::command]
-async fn convert_video(input: String, output: String, horizontal: bool) -> Result<(), String> {
-    let opts = reels_fhd_converter::ConvertOptions {
-        orientation: if horizontal {
-            reels_fhd_converter::Orientation::Horizontal
-        } else {
-            reels_fhd_converter::Orientation::Vertical
-        },
-        ..Default::default()
-    };
+async fn convert_video(input: String, output: String) -> Result<(), String> {
+    let opts = reels_fhd_converter::ConvertOptions::default();
     reels_fhd_converter::convert_to_fhd(
         std::path::Path::new(&input),
         std::path::Path::new(&output),

@@ -19,8 +19,8 @@ $OutputRoot = Join-Path ([Environment]::GetFolderPath("MyPictures")) "GeminiImag
 $UsdToKrw = 1550
 $PricingTable = @{
     "gemini-2.5-flash-image"          = @{ "default" = 0.039 }
-    "gemini-3.1-flash-image"          = @{ "1K" = 0.067; "2K" = 0.101; "4K" = 0.151 }
-    "gemini-3.1-flash-image-preview"  = @{ "1K" = 0.067; "2K" = 0.101; "4K" = 0.151 }
+    "gemini-3.1-flash-image"          = @{ "512" = 0.045; "1K" = 0.067; "2K" = 0.101; "4K" = 0.151 }
+    "gemini-3.1-flash-image-preview"  = @{ "512" = 0.045; "1K" = 0.067; "2K" = 0.101; "4K" = 0.151 }
     "gemini-3.1-flash-lite-image"     = @{ "1K" = 0.034 }
     "gemini-3-pro-image"              = @{ "1K" = 0.134; "2K" = 0.134; "4K" = 0.24 }
     "gemini-3-pro-image-preview"      = @{ "1K" = 0.134; "2K" = 0.134; "4K" = 0.24 }
@@ -52,27 +52,29 @@ function Load-Config {
     return $null
 }
 
-function Save-Config($apiKey, $aspectRatio, $imageSize, $model, $count, $outputFolder) {
+function Save-Config($apiKey, $aspectRatio, $imageSize, $model, $count, $outputFolder, $totalSpentUsd) {
     if (-not (Test-Path $ConfigDir)) {
         New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
     }
     $config = [PSCustomObject]@{
-        apiKey       = $apiKey
-        aspectRatio  = $aspectRatio
-        imageSize    = $imageSize
-        model        = $model
-        count        = $count
-        outputFolder = $outputFolder
+        apiKey        = $apiKey
+        aspectRatio   = $aspectRatio
+        imageSize     = $imageSize
+        model         = $model
+        count         = $count
+        outputFolder  = $outputFolder
+        totalSpentUsd = $totalSpentUsd
     }
     $config | ConvertTo-Json | Set-Content -Path $ConfigPath -Encoding UTF8
 }
 
 $saved = Load-Config
+$TotalSpentUsd = if ($saved -and $saved.totalSpentUsd) { [double]$saved.totalSpentUsd } else { 0.0 }
 
 # ---- Form ----
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Gemini Image Generator - Test"
-$form.Size = New-Object System.Drawing.Size(560, 715)
+$form.Size = New-Object System.Drawing.Size(560, 770)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -212,7 +214,7 @@ $cmbRatio = New-Object System.Windows.Forms.ComboBox
 $cmbRatio.Location = New-Object System.Drawing.Point(150, ($y - 3))
 $cmbRatio.Size = New-Object System.Drawing.Size(100, 24)
 $cmbRatio.DropDownStyle = "DropDownList"
-@("1:1", "16:9", "9:16", "4:3", "3:4") | ForEach-Object { $cmbRatio.Items.Add($_) | Out-Null }
+@("1:1", "16:9", "9:16", "4:3", "3:4", "2:3", "3:2", "4:5", "5:4", "1:4", "4:1", "1:8", "8:1", "21:9") | ForEach-Object { $cmbRatio.Items.Add($_) | Out-Null }
 $cmbRatio.SelectedItem = if ($saved -and $saved.aspectRatio) { $saved.aspectRatio } else { "1:1" }
 $form.Controls.Add($cmbRatio)
 
@@ -226,9 +228,21 @@ $cmbSize = New-Object System.Windows.Forms.ComboBox
 $cmbSize.Location = New-Object System.Drawing.Point(360, ($y - 3))
 $cmbSize.Size = New-Object System.Drawing.Size(80, 24)
 $cmbSize.DropDownStyle = "DropDownList"
-@("1K", "2K", "4K") | ForEach-Object { $cmbSize.Items.Add($_) | Out-Null }
+@("512", "1K", "2K", "4K") | ForEach-Object { $cmbSize.Items.Add($_) | Out-Null }
 $cmbSize.SelectedItem = if ($saved -and $saved.imageSize) { $saved.imageSize } else { "2K" }
 $form.Controls.Add($cmbSize)
+
+$y += 35
+$lblSeed = New-Object System.Windows.Forms.Label
+$lblSeed.Text = "Seed (optional):"
+$lblSeed.Location = New-Object System.Drawing.Point(15, $y)
+$lblSeed.AutoSize = $true
+$form.Controls.Add($lblSeed)
+
+$txtSeed = New-Object System.Windows.Forms.TextBox
+$txtSeed.Location = New-Object System.Drawing.Point(150, ($y - 3))
+$txtSeed.Size = New-Object System.Drawing.Size(100, 24)
+$form.Controls.Add($txtSeed)
 
 $y += 35
 $lblModel = New-Object System.Windows.Forms.Label
@@ -260,6 +274,14 @@ $lblPrice.Location = New-Object System.Drawing.Point(15, $y)
 $lblPrice.AutoSize = $true
 $lblPrice.ForeColor = [System.Drawing.Color]::DimGray
 $form.Controls.Add($lblPrice)
+
+$y += 18
+$lblTotalSpent = New-Object System.Windows.Forms.Label
+$lblTotalSpent.Text = "Total spent so far (local estimate): -"
+$lblTotalSpent.Location = New-Object System.Drawing.Point(15, $y)
+$lblTotalSpent.AutoSize = $true
+$lblTotalSpent.ForeColor = [System.Drawing.Color]::DimGray
+$form.Controls.Add($lblTotalSpent)
 
 $y += 28
 $btnGenerate = New-Object System.Windows.Forms.Button
@@ -309,6 +331,15 @@ function Update-PriceEstimate {
         -f $usd, $krw, $note, $count, $totalUsd, $totalKrw)
 }
 
+# This is our own running total, not something Google exposes through the API key -
+# querying real account balance needs OAuth + a service account (see README). Treat this as
+# a rough local estimate, not the real number; check the Cloud Billing console for that.
+function Update-TotalSpentLabel {
+    $krw = [math]::Round($script:TotalSpentUsd * $UsdToKrw)
+    $usdRounded = [math]::Round($script:TotalSpentUsd, 3)
+    $lblTotalSpent.Text = "Total spent so far (local estimate): ~`$$usdRounded (~$krw KRW)"
+}
+
 function Get-ReferenceImageMimeType($path) {
     switch ([IO.Path]::GetExtension($path).ToLower()) {
         ".png"  { return "image/png" }
@@ -319,7 +350,7 @@ function Get-ReferenceImageMimeType($path) {
     }
 }
 
-function Generate-One($apiKey, $prompt, $model, $aspectRatio, $imageSize, $referenceImagePath, $outPath) {
+function Generate-One($apiKey, $prompt, $model, $aspectRatio, $imageSize, $seed, $referenceImagePath, $outPath) {
     $url = "https://generativelanguage.googleapis.com/v1beta/models/$($model):generateContent"
 
     # NOTE: ConvertTo-Json silently collapses single-element arrays (e.g. "contents": [{...}]
@@ -338,12 +369,18 @@ function Generate-One($apiKey, $prompt, $model, $aspectRatio, $imageSize, $refer
         $refPartJson = "{`"inlineData`": {`"mimeType`": `"$mimeType`", `"data`": `"$imageBase64`"}},"
     }
 
+    $seedJson = ""
+    $seedInt = 0
+    if ((-not [string]::IsNullOrWhiteSpace($seed)) -and [int]::TryParse($seed, [ref]$seedInt)) {
+        $seedJson = ",`"seed`": $seedInt"
+    }
+
     $body = @"
 {
   "contents": [{"parts": [$refPartJson{"text": $escapedPrompt}]}],
   "generationConfig": {
     "responseModalities": ["TEXT", "IMAGE"],
-    "imageConfig": {"aspectRatio": "$aspectRatio", "imageSize": "$imageSize"}
+    "imageConfig": {"aspectRatio": "$aspectRatio", "imageSize": "$imageSize"}$seedJson
   }
 }
 "@
@@ -429,6 +466,7 @@ $form.Add_Shown({
         Refresh-ModelList $saved.apiKey
     }
     Update-PriceEstimate
+    Update-TotalSpentLabel
 })
 
 $cmbModel.Add_SelectedIndexChanged({ Update-PriceEstimate })
@@ -444,6 +482,7 @@ $btnGenerate.Add_Click({
     $count = [int]$numCount.Value
     $outputFolder = $txtFolder.Text.Trim()
     $referenceImagePath = $txtRefImage.Text.Trim()
+    $seed = $txtSeed.Text.Trim()
 
     if ([string]::IsNullOrWhiteSpace($apiKey)) {
         [System.Windows.Forms.MessageBox]::Show("Enter an API key first.", "Missing API key") | Out-Null
@@ -458,7 +497,7 @@ $btnGenerate.Add_Click({
         return
     }
 
-    Save-Config $apiKey $aspectRatio $imageSize $model $count $outputFolder
+    Save-Config $apiKey $aspectRatio $imageSize $model $count $outputFolder $TotalSpentUsd
 
     $btnGenerate.Enabled = $false
     $txtLog.Clear()
@@ -477,14 +516,22 @@ $btnGenerate.Add_Click({
     }
     Write-Log "Generating $count image(s)..."
 
+    $priceResult = Get-EstimatedPriceUsd $model $imageSize
+    $perImageUsd = $priceResult.price
+
     $successCount = 0
     for ($i = 1; $i -le $count; $i++) {
         Write-Log "[$i/$count] requesting..."
         $outPath = Join-Path $batchDir ("image-{0:D2}.png" -f $i)
         try {
-            Generate-One $apiKey $prompt $model $aspectRatio $imageSize $referenceImagePath $outPath
+            Generate-One $apiKey $prompt $model $aspectRatio $imageSize $seed $referenceImagePath $outPath
             Write-Log "[$i/$count] saved: $(Split-Path $outPath -Leaf)"
             $successCount++
+            if ($null -ne $perImageUsd) {
+                $script:TotalSpentUsd += $perImageUsd
+                Update-TotalSpentLabel
+                Save-Config $apiKey $aspectRatio $imageSize $model $count $outputFolder $script:TotalSpentUsd
+            }
         } catch {
             Write-Log "[$i/$count] FAILED: $($_.Exception.Message)"
         }

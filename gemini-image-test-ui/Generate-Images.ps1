@@ -52,30 +52,27 @@ function Load-Config {
     return $null
 }
 
-function Save-Config($apiKey, $aspectRatio, $imageSize, $model, $count, $outputFolder, $totalSpentUsd, $budgetKrw) {
+function Save-Config($apiKey, $aspectRatio, $imageSize, $model, $count, $outputFolder) {
     if (-not (Test-Path $ConfigDir)) {
         New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
     }
     $config = [PSCustomObject]@{
-        apiKey        = $apiKey
-        aspectRatio   = $aspectRatio
-        imageSize     = $imageSize
-        model         = $model
-        count         = $count
-        outputFolder  = $outputFolder
-        totalSpentUsd = $totalSpentUsd
-        budgetKrw     = $budgetKrw
+        apiKey       = $apiKey
+        aspectRatio  = $aspectRatio
+        imageSize    = $imageSize
+        model        = $model
+        count        = $count
+        outputFolder = $outputFolder
     }
     $config | ConvertTo-Json | Set-Content -Path $ConfigPath -Encoding UTF8
 }
 
 $saved = Load-Config
-$TotalSpentUsd = if ($saved -and $saved.totalSpentUsd) { [double]$saved.totalSpentUsd } else { 0.0 }
 
 # ---- Form ----
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Gemini Image Generator - Test"
-$form.Size = New-Object System.Drawing.Size(560, 760)
+$form.Size = New-Object System.Drawing.Size(560, 735)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -135,14 +132,15 @@ $form.Controls.Add($lblRefImage)
 $y += 20
 $txtRefImage = New-Object System.Windows.Forms.TextBox
 $txtRefImage.Location = New-Object System.Drawing.Point(15, $y)
-$txtRefImage.Size = New-Object System.Drawing.Size(340, 24)
+$txtRefImage.Size = New-Object System.Drawing.Size(215, 24)
 $txtRefImage.ReadOnly = $true
+$txtRefImage.AllowDrop = $true
 $form.Controls.Add($txtRefImage)
 
 $btnBrowseRef = New-Object System.Windows.Forms.Button
 $btnBrowseRef.Text = "Browse..."
-$btnBrowseRef.Location = New-Object System.Drawing.Point(360, ($y - 1))
-$btnBrowseRef.Size = New-Object System.Drawing.Size(80, 24)
+$btnBrowseRef.Location = New-Object System.Drawing.Point(235, ($y - 1))
+$btnBrowseRef.Size = New-Object System.Drawing.Size(75, 24)
 $btnBrowseRef.Add_Click({
     $dialog = New-Object System.Windows.Forms.OpenFileDialog
     $dialog.Title = "Choose a reference image"
@@ -153,12 +151,40 @@ $btnBrowseRef.Add_Click({
 })
 $form.Controls.Add($btnBrowseRef)
 
+$btnPasteRef = New-Object System.Windows.Forms.Button
+$btnPasteRef.Text = "Paste"
+$btnPasteRef.Location = New-Object System.Drawing.Point(315, ($y - 1))
+$btnPasteRef.Size = New-Object System.Drawing.Size(65, 24)
+$btnPasteRef.Add_Click({ Set-ReferenceImageFromClipboard })
+$form.Controls.Add($btnPasteRef)
+
 $btnClearRef = New-Object System.Windows.Forms.Button
 $btnClearRef.Text = "Clear"
-$btnClearRef.Location = New-Object System.Drawing.Point(445, ($y - 1))
+$btnClearRef.Location = New-Object System.Drawing.Point(385, ($y - 1))
 $btnClearRef.Size = New-Object System.Drawing.Size(60, 24)
 $btnClearRef.Add_Click({ $txtRefImage.Text = "" })
 $form.Controls.Add($btnClearRef)
+
+$txtRefImage.Add_DragEnter({
+    param($sender, $e)
+    if ($e.Data.GetDataPresent([System.Windows.Forms.DataFormats]::FileDrop)) {
+        $e.Effect = [System.Windows.Forms.DragDropEffects]::Copy
+    }
+})
+$txtRefImage.Add_DragDrop({
+    param($sender, $e)
+    $files = $e.Data.GetData([System.Windows.Forms.DataFormats]::FileDrop)
+    if ($files -and $files.Count -gt 0) {
+        Set-ReferenceImagePath $files[0]
+    }
+})
+$txtRefImage.Add_KeyDown({
+    param($sender, $e)
+    if ($e.Control -and $e.KeyCode -eq [System.Windows.Forms.Keys]::V) {
+        Set-ReferenceImageFromClipboard
+        $e.SuppressKeyPress = $true
+    }
+})
 
 $y += 35
 $lblFolder = New-Object System.Windows.Forms.Label
@@ -265,25 +291,12 @@ $lblPrice.ForeColor = [System.Drawing.Color]::DimGray
 $form.Controls.Add($lblPrice)
 
 $y += 18
-$lblBudget = New-Object System.Windows.Forms.Label
-$lblBudget.Text = "Budget charged (KRW):"
-$lblBudget.Location = New-Object System.Drawing.Point(15, $y)
-$lblBudget.AutoSize = $true
-$form.Controls.Add($lblBudget)
-
-$txtBudget = New-Object System.Windows.Forms.TextBox
-$txtBudget.Location = New-Object System.Drawing.Point(170, ($y - 3))
-$txtBudget.Size = New-Object System.Drawing.Size(90, 24)
-if ($saved -and $saved.budgetKrw) { $txtBudget.Text = $saved.budgetKrw }
-$form.Controls.Add($txtBudget)
-
-$y += 24
-$lblTotalSpent = New-Object System.Windows.Forms.Label
-$lblTotalSpent.Text = "Spent / remaining (local estimate): -"
-$lblTotalSpent.Location = New-Object System.Drawing.Point(15, $y)
-$lblTotalSpent.AutoSize = $true
-$lblTotalSpent.ForeColor = [System.Drawing.Color]::DimGray
-$form.Controls.Add($lblTotalSpent)
+$lblSizeBreakdown = New-Object System.Windows.Forms.Label
+$lblSizeBreakdown.Text = "Price by size: -"
+$lblSizeBreakdown.Location = New-Object System.Drawing.Point(15, $y)
+$lblSizeBreakdown.AutoSize = $true
+$lblSizeBreakdown.ForeColor = [System.Drawing.Color]::DimGray
+$form.Controls.Add($lblSizeBreakdown)
 
 $y += 28
 $btnGenerate = New-Object System.Windows.Forms.Button
@@ -333,20 +346,27 @@ function Update-PriceEstimate {
         -f $usd, $krw, $note, $count, $totalUsd, $totalKrw)
 }
 
-# This is our own running total, not something Google exposes through the API key -
-# querying real account balance needs OAuth + a service account (see README). Treat this as
-# a rough local estimate, not the real number; check the Cloud Billing console for that.
-function Update-TotalSpentLabel {
-    $spentKrw = [math]::Round($script:TotalSpentUsd * $UsdToKrw)
-
-    $budgetText = $txtBudget.Text.Trim()
-    $budgetKrw = 0
-    if ((-not [string]::IsNullOrWhiteSpace($budgetText)) -and [int]::TryParse($budgetText, [ref]$budgetKrw)) {
-        $remainingKrw = $budgetKrw - $spentKrw
-        $lblTotalSpent.Text = "Spent: ~$spentKrw KRW  |  Remaining of ~$budgetKrw KRW budget: ~$remainingKrw KRW (local estimate)"
-    } else {
-        $lblTotalSpent.Text = "Spent so far: ~$spentKrw KRW (local estimate) - enter a budget above to see remaining"
+# Shows every size's price for the currently selected model side by side, so switching
+# 512/1K/2K/4K in the dropdown isn't the only way to see how much each one costs.
+function Update-SizeBreakdown {
+    $model = $cmbModel.SelectedItem
+    if (-not $model -or -not $PricingTable.ContainsKey($model)) {
+        $lblSizeBreakdown.Text = "Price by size: unknown for this model"
+        return
     }
+
+    $sizeOrder = @("512", "1K", "2K", "4K")
+    $sizes = $PricingTable[$model]
+    $parts = foreach ($size in $sizeOrder) {
+        if ($sizes.ContainsKey($size)) {
+            "{0}: ~`${1}" -f $size, $sizes[$size]
+        }
+    }
+    if ($sizes.ContainsKey("default") -and -not $parts) {
+        $parts = @("all sizes: ~`${0}" -f $sizes["default"])
+    }
+
+    $lblSizeBreakdown.Text = "Price by size ($model): " + ($parts -join "  |  ")
 }
 
 function Get-ReferenceImageMimeType($path) {
@@ -357,6 +377,42 @@ function Get-ReferenceImageMimeType($path) {
         ".webp" { return "image/webp" }
         default { throw "unsupported reference image extension: $path" }
     }
+}
+
+function Set-ReferenceImagePath($path) {
+    try {
+        Get-ReferenceImageMimeType $path | Out-Null
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Unsupported file type: $path`r`n(needs .png, .jpg, .jpeg, or .webp)",
+            "Unsupported reference image"
+        ) | Out-Null
+        return
+    }
+    $txtRefImage.Text = $path
+}
+
+# Ctrl+V into the reference image field: if the clipboard holds an actual file (e.g. copied
+# from Explorer), use it directly; if it holds raw image data (e.g. a screenshot), save it to
+# a temp PNG first since the rest of the pipeline works off file paths, not clipboard bitmaps.
+function Set-ReferenceImageFromClipboard {
+    if ([System.Windows.Forms.Clipboard]::ContainsFileDropList()) {
+        $files = [System.Windows.Forms.Clipboard]::GetFileDropList()
+        if ($files.Count -gt 0) {
+            Set-ReferenceImagePath $files[0]
+            return
+        }
+    }
+
+    if ([System.Windows.Forms.Clipboard]::ContainsImage()) {
+        $image = [System.Windows.Forms.Clipboard]::GetImage()
+        $tempPath = Join-Path $env:TEMP ("gemini-ref-{0}.png" -f (Get-Date -Format "yyyyMMdd-HHmmss-fff"))
+        $image.Save($tempPath, [System.Drawing.Imaging.ImageFormat]::Png)
+        $txtRefImage.Text = $tempPath
+        return
+    }
+
+    [System.Windows.Forms.MessageBox]::Show("Clipboard doesn't contain an image or image file.", "Nothing to paste") | Out-Null
 }
 
 function Generate-One($apiKey, $prompt, $model, $aspectRatio, $imageSize, $referenceImagePath, $outPath) {
@@ -469,17 +525,12 @@ $form.Add_Shown({
         Refresh-ModelList $saved.apiKey
     }
     Update-PriceEstimate
-    Update-TotalSpentLabel
+    Update-SizeBreakdown
 })
 
-$cmbModel.Add_SelectedIndexChanged({ Update-PriceEstimate })
+$cmbModel.Add_SelectedIndexChanged({ Update-PriceEstimate; Update-SizeBreakdown })
 $cmbSize.Add_SelectedIndexChanged({ Update-PriceEstimate })
 $numCount.Add_ValueChanged({ Update-PriceEstimate })
-
-$txtBudget.Add_TextChanged({
-    Update-TotalSpentLabel
-    Save-Config $txtKey.Text.Trim() $cmbRatio.SelectedItem $cmbSize.SelectedItem $cmbModel.SelectedItem ([int]$numCount.Value) $txtFolder.Text.Trim() $script:TotalSpentUsd $txtBudget.Text.Trim()
-})
 
 $btnGenerate.Add_Click({
     $apiKey = $txtKey.Text.Trim()
@@ -504,7 +555,7 @@ $btnGenerate.Add_Click({
         return
     }
 
-    Save-Config $apiKey $aspectRatio $imageSize $model $count $outputFolder $TotalSpentUsd $txtBudget.Text.Trim()
+    Save-Config $apiKey $aspectRatio $imageSize $model $count $outputFolder
 
     $btnGenerate.Enabled = $false
     $txtLog.Clear()
@@ -523,9 +574,6 @@ $btnGenerate.Add_Click({
     }
     Write-Log "Generating $count image(s)..."
 
-    $priceResult = Get-EstimatedPriceUsd $model $imageSize
-    $perImageUsd = $priceResult.price
-
     $successCount = 0
     for ($i = 1; $i -le $count; $i++) {
         Write-Log "[$i/$count] requesting..."
@@ -534,11 +582,6 @@ $btnGenerate.Add_Click({
             Generate-One $apiKey $prompt $model $aspectRatio $imageSize $referenceImagePath $outPath
             Write-Log "[$i/$count] saved: $(Split-Path $outPath -Leaf)"
             $successCount++
-            if ($null -ne $perImageUsd) {
-                $script:TotalSpentUsd += $perImageUsd
-                Update-TotalSpentLabel
-                Save-Config $apiKey $aspectRatio $imageSize $model $count $outputFolder $script:TotalSpentUsd $txtBudget.Text.Trim()
-            }
         } catch {
             Write-Log "[$i/$count] FAILED: $($_.Exception.Message)"
         }

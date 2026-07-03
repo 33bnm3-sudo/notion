@@ -13,6 +13,34 @@ $ConfigDir = Join-Path $env:APPDATA "GeminiImageTest"
 $ConfigPath = Join-Path $ConfigDir "config.json"
 $OutputRoot = Join-Path ([Environment]::GetFolderPath("MyPictures")) "GeminiImageTest"
 
+# Manually maintained from ai.google.dev/gemini-api/docs/pricing (checked 2026-07). Google
+# does not expose pricing through the API, so this can drift - treat it as an estimate, not
+# a bill. USD/KRW is a rough snapshot too, not a live rate.
+$UsdToKrw = 1550
+$PricingTable = @{
+    "gemini-2.5-flash-image"          = @{ "default" = 0.039 }
+    "gemini-3.1-flash-image"          = @{ "1K" = 0.067; "2K" = 0.101; "4K" = 0.151 }
+    "gemini-3.1-flash-image-preview"  = @{ "1K" = 0.067; "2K" = 0.101; "4K" = 0.151 }
+    "gemini-3.1-flash-lite-image"     = @{ "1K" = 0.034 }
+    "gemini-3-pro-image"              = @{ "1K" = 0.134; "2K" = 0.134; "4K" = 0.24 }
+    "gemini-3-pro-image-preview"      = @{ "1K" = 0.134; "2K" = 0.134; "4K" = 0.24 }
+}
+
+function Get-EstimatedPriceUsd($model, $size) {
+    if (-not $PricingTable.ContainsKey($model)) {
+        return @{ price = $null; exact = $false }
+    }
+    $sizes = $PricingTable[$model]
+    if ($sizes.ContainsKey($size)) {
+        return @{ price = $sizes[$size]; exact = $true }
+    }
+    if ($sizes.ContainsKey("default")) {
+        return @{ price = $sizes["default"]; exact = $false }
+    }
+    $fallback = $sizes.GetEnumerator() | Select-Object -First 1
+    return @{ price = $fallback.Value; exact = $false }
+}
+
 function Load-Config {
     if (Test-Path $ConfigPath) {
         try {
@@ -44,7 +72,7 @@ $saved = Load-Config
 # ---- Form ----
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Gemini Image Generator - Test"
-$form.Size = New-Object System.Drawing.Size(560, 635)
+$form.Size = New-Object System.Drawing.Size(560, 655)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -190,7 +218,15 @@ $btnRefreshModels.Location = New-Object System.Drawing.Point(440, ($y - 4))
 $btnRefreshModels.Size = New-Object System.Drawing.Size(90, 26)
 $form.Controls.Add($btnRefreshModels)
 
-$y += 40
+$y += 24
+$lblPrice = New-Object System.Windows.Forms.Label
+$lblPrice.Text = "Estimated cost: -"
+$lblPrice.Location = New-Object System.Drawing.Point(15, $y)
+$lblPrice.AutoSize = $true
+$lblPrice.ForeColor = [System.Drawing.Color]::DimGray
+$form.Controls.Add($lblPrice)
+
+$y += 28
 $btnGenerate = New-Object System.Windows.Forms.Button
 $btnGenerate.Text = "Generate"
 $btnGenerate.Location = New-Object System.Drawing.Point(15, $y)
@@ -210,6 +246,32 @@ $form.Controls.Add($txtLog)
 function Write-Log($text) {
     $txtLog.AppendText("$text`r`n")
     [System.Windows.Forms.Application]::DoEvents()
+}
+
+function Update-PriceEstimate {
+    $model = $cmbModel.SelectedItem
+    $size = $cmbSize.SelectedItem
+    $count = [int]$numCount.Value
+
+    if (-not $model -or -not $size) {
+        $lblPrice.Text = "Estimated cost: -"
+        return
+    }
+
+    $result = Get-EstimatedPriceUsd $model $size
+    if ($null -eq $result.price) {
+        $lblPrice.Text = "Estimated cost: unknown for this model (check the official pricing page)"
+        return
+    }
+
+    $usd = $result.price
+    $krw = [math]::Round($usd * $UsdToKrw)
+    $totalUsd = [math]::Round($usd * $count, 3)
+    $totalKrw = [math]::Round($usd * $count * $UsdToKrw)
+    $note = if ($result.exact) { "" } else { " (approx, no exact price for this size)" }
+
+    $lblPrice.Text = ("Estimated cost: ~`${0}/image (~{1} KRW){2}  |  total for {3}: ~`${4} (~{5} KRW)" `
+        -f $usd, $krw, $note, $count, $totalUsd, $totalKrw)
 }
 
 function Generate-One($apiKey, $prompt, $model, $aspectRatio, $imageSize, $outPath) {
@@ -310,7 +372,12 @@ $form.Add_Shown({
     if ($saved -and $saved.apiKey) {
         Refresh-ModelList $saved.apiKey
     }
+    Update-PriceEstimate
 })
+
+$cmbModel.Add_SelectedIndexChanged({ Update-PriceEstimate })
+$cmbSize.Add_SelectedIndexChanged({ Update-PriceEstimate })
+$numCount.Add_ValueChanged({ Update-PriceEstimate })
 
 $btnGenerate.Add_Click({
     $apiKey = $txtKey.Text.Trim()

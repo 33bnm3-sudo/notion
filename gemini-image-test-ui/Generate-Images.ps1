@@ -24,16 +24,17 @@ function Load-Config {
     return $null
 }
 
-function Save-Config($apiKey, $aspectRatio, $imageSize, $model, $count) {
+function Save-Config($apiKey, $aspectRatio, $imageSize, $model, $count, $outputFolder) {
     if (-not (Test-Path $ConfigDir)) {
         New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
     }
     $config = [PSCustomObject]@{
-        apiKey      = $apiKey
-        aspectRatio = $aspectRatio
-        imageSize   = $imageSize
-        model       = $model
-        count       = $count
+        apiKey       = $apiKey
+        aspectRatio  = $aspectRatio
+        imageSize    = $imageSize
+        model        = $model
+        count        = $count
+        outputFolder = $outputFolder
     }
     $config | ConvertTo-Json | Set-Content -Path $ConfigPath -Encoding UTF8
 }
@@ -43,7 +44,7 @@ $saved = Load-Config
 # ---- Form ----
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Gemini Image Generator - Test"
-$form.Size = New-Object System.Drawing.Size(560, 560)
+$form.Size = New-Object System.Drawing.Size(560, 620)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -86,6 +87,35 @@ $txtPrompt.ScrollBars = "Vertical"
 $form.Controls.Add($txtPrompt)
 
 $y += 105
+$lblFolder = New-Object System.Windows.Forms.Label
+$lblFolder.Text = "Output folder:"
+$lblFolder.Location = New-Object System.Drawing.Point(15, $y)
+$lblFolder.AutoSize = $true
+$form.Controls.Add($lblFolder)
+
+$y += 20
+$txtFolder = New-Object System.Windows.Forms.TextBox
+$txtFolder.Location = New-Object System.Drawing.Point(15, $y)
+$txtFolder.Size = New-Object System.Drawing.Size(420, 24)
+$txtFolder.ReadOnly = $true
+$txtFolder.Text = if ($saved -and $saved.outputFolder) { $saved.outputFolder } else { $OutputRoot }
+$form.Controls.Add($txtFolder)
+
+$btnBrowse = New-Object System.Windows.Forms.Button
+$btnBrowse.Text = "Browse..."
+$btnBrowse.Location = New-Object System.Drawing.Point(440, ($y - 1))
+$btnBrowse.Size = New-Object System.Drawing.Size(90, 24)
+$btnBrowse.Add_Click({
+    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dialog.Description = "Choose where generated images will be saved"
+    if (Test-Path $txtFolder.Text) { $dialog.SelectedPath = $txtFolder.Text }
+    if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        $txtFolder.Text = $dialog.SelectedPath
+    }
+})
+$form.Controls.Add($btnBrowse)
+
+$y += 35
 $lblCount = New-Object System.Windows.Forms.Label
 $lblCount.Text = "Number of images:"
 $lblCount.Location = New-Object System.Drawing.Point(15, $y)
@@ -216,6 +246,7 @@ $btnGenerate.Add_Click({
     $imageSize = $cmbSize.SelectedItem
     $model = $cmbModel.SelectedItem
     $count = [int]$numCount.Value
+    $outputFolder = $txtFolder.Text.Trim()
 
     if ([string]::IsNullOrWhiteSpace($apiKey)) {
         [System.Windows.Forms.MessageBox]::Show("Enter an API key first.", "Missing API key") | Out-Null
@@ -225,14 +256,22 @@ $btnGenerate.Add_Click({
         [System.Windows.Forms.MessageBox]::Show("Enter a prompt first.", "Missing prompt") | Out-Null
         return
     }
+    if ([string]::IsNullOrWhiteSpace($outputFolder)) {
+        [System.Windows.Forms.MessageBox]::Show("Choose an output folder first.", "Missing output folder") | Out-Null
+        return
+    }
 
-    Save-Config $apiKey $aspectRatio $imageSize $model $count
+    Save-Config $apiKey $aspectRatio $imageSize $model $count $outputFolder
 
     $btnGenerate.Enabled = $false
     $txtLog.Clear()
 
+    if (-not (Test-Path $outputFolder)) {
+        New-Item -ItemType Directory -Path $outputFolder -Force | Out-Null
+    }
+
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-    $batchDir = Join-Path $OutputRoot $stamp
+    $batchDir = Join-Path $outputFolder $stamp
     New-Item -ItemType Directory -Path $batchDir -Force | Out-Null
 
     Write-Log "Output folder: $batchDir"

@@ -44,7 +44,7 @@ $saved = Load-Config
 # ---- Form ----
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Gemini Image Generator - Test"
-$form.Size = New-Object System.Drawing.Size(560, 620)
+$form.Size = New-Object System.Drawing.Size(560, 635)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -71,7 +71,15 @@ $chkShowKey.AutoSize = $true
 $chkShowKey.Add_CheckedChanged({ $txtKey.UseSystemPasswordChar = -not $chkShowKey.Checked })
 $form.Controls.Add($chkShowKey)
 
-$y += 35
+$y += 22
+$lnkGetKey = New-Object System.Windows.Forms.LinkLabel
+$lnkGetKey.Text = "Get an API key (Google AI Studio)"
+$lnkGetKey.Location = New-Object System.Drawing.Point(100, $y)
+$lnkGetKey.AutoSize = $true
+$lnkGetKey.Add_LinkClicked({ Start-Process "https://aistudio.google.com/app/apikey" })
+$form.Controls.Add($lnkGetKey)
+
+$y += 25
 $lblPrompt = New-Object System.Windows.Forms.Label
 $lblPrompt.Text = "Prompt:"
 $lblPrompt.Location = New-Object System.Drawing.Point(15, $y)

@@ -52,7 +52,7 @@ function Load-Config {
     return $null
 }
 
-function Save-Config($apiKey, $aspectRatio, $imageSize, $model, $count, $outputFolder, $totalSpentUsd) {
+function Save-Config($apiKey, $aspectRatio, $imageSize, $model, $count, $outputFolder, $totalSpentUsd, $budgetKrw) {
     if (-not (Test-Path $ConfigDir)) {
         New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
     }
@@ -64,6 +64,7 @@ function Save-Config($apiKey, $aspectRatio, $imageSize, $model, $count, $outputF
         count         = $count
         outputFolder  = $outputFolder
         totalSpentUsd = $totalSpentUsd
+        budgetKrw     = $budgetKrw
     }
     $config | ConvertTo-Json | Set-Content -Path $ConfigPath -Encoding UTF8
 }
@@ -74,7 +75,7 @@ $TotalSpentUsd = if ($saved -and $saved.totalSpentUsd) { [double]$saved.totalSpe
 # ---- Form ----
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Gemini Image Generator - Test"
-$form.Size = New-Object System.Drawing.Size(560, 770)
+$form.Size = New-Object System.Drawing.Size(560, 760)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -214,7 +215,7 @@ $cmbRatio = New-Object System.Windows.Forms.ComboBox
 $cmbRatio.Location = New-Object System.Drawing.Point(150, ($y - 3))
 $cmbRatio.Size = New-Object System.Drawing.Size(100, 24)
 $cmbRatio.DropDownStyle = "DropDownList"
-@("1:1", "16:9", "9:16", "4:3", "3:4", "2:3", "3:2", "4:5", "5:4", "1:4", "4:1", "1:8", "8:1", "21:9") | ForEach-Object { $cmbRatio.Items.Add($_) | Out-Null }
+@("1:1", "16:9", "9:16", "4:3", "3:4") | ForEach-Object { $cmbRatio.Items.Add($_) | Out-Null }
 $cmbRatio.SelectedItem = if ($saved -and $saved.aspectRatio) { $saved.aspectRatio } else { "1:1" }
 $form.Controls.Add($cmbRatio)
 
@@ -231,18 +232,6 @@ $cmbSize.DropDownStyle = "DropDownList"
 @("512", "1K", "2K", "4K") | ForEach-Object { $cmbSize.Items.Add($_) | Out-Null }
 $cmbSize.SelectedItem = if ($saved -and $saved.imageSize) { $saved.imageSize } else { "2K" }
 $form.Controls.Add($cmbSize)
-
-$y += 35
-$lblSeed = New-Object System.Windows.Forms.Label
-$lblSeed.Text = "Seed (optional):"
-$lblSeed.Location = New-Object System.Drawing.Point(15, $y)
-$lblSeed.AutoSize = $true
-$form.Controls.Add($lblSeed)
-
-$txtSeed = New-Object System.Windows.Forms.TextBox
-$txtSeed.Location = New-Object System.Drawing.Point(150, ($y - 3))
-$txtSeed.Size = New-Object System.Drawing.Size(100, 24)
-$form.Controls.Add($txtSeed)
 
 $y += 35
 $lblModel = New-Object System.Windows.Forms.Label
@@ -276,8 +265,21 @@ $lblPrice.ForeColor = [System.Drawing.Color]::DimGray
 $form.Controls.Add($lblPrice)
 
 $y += 18
+$lblBudget = New-Object System.Windows.Forms.Label
+$lblBudget.Text = "Budget charged (KRW):"
+$lblBudget.Location = New-Object System.Drawing.Point(15, $y)
+$lblBudget.AutoSize = $true
+$form.Controls.Add($lblBudget)
+
+$txtBudget = New-Object System.Windows.Forms.TextBox
+$txtBudget.Location = New-Object System.Drawing.Point(170, ($y - 3))
+$txtBudget.Size = New-Object System.Drawing.Size(90, 24)
+if ($saved -and $saved.budgetKrw) { $txtBudget.Text = $saved.budgetKrw }
+$form.Controls.Add($txtBudget)
+
+$y += 24
 $lblTotalSpent = New-Object System.Windows.Forms.Label
-$lblTotalSpent.Text = "Total spent so far (local estimate): -"
+$lblTotalSpent.Text = "Spent / remaining (local estimate): -"
 $lblTotalSpent.Location = New-Object System.Drawing.Point(15, $y)
 $lblTotalSpent.AutoSize = $true
 $lblTotalSpent.ForeColor = [System.Drawing.Color]::DimGray
@@ -335,9 +337,16 @@ function Update-PriceEstimate {
 # querying real account balance needs OAuth + a service account (see README). Treat this as
 # a rough local estimate, not the real number; check the Cloud Billing console for that.
 function Update-TotalSpentLabel {
-    $krw = [math]::Round($script:TotalSpentUsd * $UsdToKrw)
-    $usdRounded = [math]::Round($script:TotalSpentUsd, 3)
-    $lblTotalSpent.Text = "Total spent so far (local estimate): ~`$$usdRounded (~$krw KRW)"
+    $spentKrw = [math]::Round($script:TotalSpentUsd * $UsdToKrw)
+
+    $budgetText = $txtBudget.Text.Trim()
+    $budgetKrw = 0
+    if ((-not [string]::IsNullOrWhiteSpace($budgetText)) -and [int]::TryParse($budgetText, [ref]$budgetKrw)) {
+        $remainingKrw = $budgetKrw - $spentKrw
+        $lblTotalSpent.Text = "Spent: ~$spentKrw KRW  |  Remaining of ~$budgetKrw KRW budget: ~$remainingKrw KRW (local estimate)"
+    } else {
+        $lblTotalSpent.Text = "Spent so far: ~$spentKrw KRW (local estimate) - enter a budget above to see remaining"
+    }
 }
 
 function Get-ReferenceImageMimeType($path) {
@@ -350,7 +359,7 @@ function Get-ReferenceImageMimeType($path) {
     }
 }
 
-function Generate-One($apiKey, $prompt, $model, $aspectRatio, $imageSize, $seed, $referenceImagePath, $outPath) {
+function Generate-One($apiKey, $prompt, $model, $aspectRatio, $imageSize, $referenceImagePath, $outPath) {
     $url = "https://generativelanguage.googleapis.com/v1beta/models/$($model):generateContent"
 
     # NOTE: ConvertTo-Json silently collapses single-element arrays (e.g. "contents": [{...}]
@@ -369,18 +378,12 @@ function Generate-One($apiKey, $prompt, $model, $aspectRatio, $imageSize, $seed,
         $refPartJson = "{`"inlineData`": {`"mimeType`": `"$mimeType`", `"data`": `"$imageBase64`"}},"
     }
 
-    $seedJson = ""
-    $seedInt = 0
-    if ((-not [string]::IsNullOrWhiteSpace($seed)) -and [int]::TryParse($seed, [ref]$seedInt)) {
-        $seedJson = ",`"seed`": $seedInt"
-    }
-
     $body = @"
 {
   "contents": [{"parts": [$refPartJson{"text": $escapedPrompt}]}],
   "generationConfig": {
     "responseModalities": ["TEXT", "IMAGE"],
-    "imageConfig": {"aspectRatio": "$aspectRatio", "imageSize": "$imageSize"}$seedJson
+    "imageConfig": {"aspectRatio": "$aspectRatio", "imageSize": "$imageSize"}
   }
 }
 "@
@@ -473,6 +476,11 @@ $cmbModel.Add_SelectedIndexChanged({ Update-PriceEstimate })
 $cmbSize.Add_SelectedIndexChanged({ Update-PriceEstimate })
 $numCount.Add_ValueChanged({ Update-PriceEstimate })
 
+$txtBudget.Add_TextChanged({
+    Update-TotalSpentLabel
+    Save-Config $txtKey.Text.Trim() $cmbRatio.SelectedItem $cmbSize.SelectedItem $cmbModel.SelectedItem ([int]$numCount.Value) $txtFolder.Text.Trim() $script:TotalSpentUsd $txtBudget.Text.Trim()
+})
+
 $btnGenerate.Add_Click({
     $apiKey = $txtKey.Text.Trim()
     $prompt = $txtPrompt.Text.Trim()
@@ -482,7 +490,6 @@ $btnGenerate.Add_Click({
     $count = [int]$numCount.Value
     $outputFolder = $txtFolder.Text.Trim()
     $referenceImagePath = $txtRefImage.Text.Trim()
-    $seed = $txtSeed.Text.Trim()
 
     if ([string]::IsNullOrWhiteSpace($apiKey)) {
         [System.Windows.Forms.MessageBox]::Show("Enter an API key first.", "Missing API key") | Out-Null
@@ -497,7 +504,7 @@ $btnGenerate.Add_Click({
         return
     }
 
-    Save-Config $apiKey $aspectRatio $imageSize $model $count $outputFolder $TotalSpentUsd
+    Save-Config $apiKey $aspectRatio $imageSize $model $count $outputFolder $TotalSpentUsd $txtBudget.Text.Trim()
 
     $btnGenerate.Enabled = $false
     $txtLog.Clear()
@@ -524,13 +531,13 @@ $btnGenerate.Add_Click({
         Write-Log "[$i/$count] requesting..."
         $outPath = Join-Path $batchDir ("image-{0:D2}.png" -f $i)
         try {
-            Generate-One $apiKey $prompt $model $aspectRatio $imageSize $seed $referenceImagePath $outPath
+            Generate-One $apiKey $prompt $model $aspectRatio $imageSize $referenceImagePath $outPath
             Write-Log "[$i/$count] saved: $(Split-Path $outPath -Leaf)"
             $successCount++
             if ($null -ne $perImageUsd) {
                 $script:TotalSpentUsd += $perImageUsd
                 Update-TotalSpentLabel
-                Save-Config $apiKey $aspectRatio $imageSize $model $count $outputFolder $script:TotalSpentUsd
+                Save-Config $apiKey $aspectRatio $imageSize $model $count $outputFolder $script:TotalSpentUsd $txtBudget.Text.Trim()
             }
         } catch {
             Write-Log "[$i/$count] FAILED: $($_.Exception.Message)"

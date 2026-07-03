@@ -72,7 +72,7 @@ $saved = Load-Config
 # ---- Form ----
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Gemini Image Generator - Test"
-$form.Size = New-Object System.Drawing.Size(560, 655)
+$form.Size = New-Object System.Drawing.Size(560, 715)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -123,6 +123,41 @@ $txtPrompt.ScrollBars = "Vertical"
 $form.Controls.Add($txtPrompt)
 
 $y += 105
+$lblRefImage = New-Object System.Windows.Forms.Label
+$lblRefImage.Text = "Reference image (optional):"
+$lblRefImage.Location = New-Object System.Drawing.Point(15, $y)
+$lblRefImage.AutoSize = $true
+$form.Controls.Add($lblRefImage)
+
+$y += 20
+$txtRefImage = New-Object System.Windows.Forms.TextBox
+$txtRefImage.Location = New-Object System.Drawing.Point(15, $y)
+$txtRefImage.Size = New-Object System.Drawing.Size(340, 24)
+$txtRefImage.ReadOnly = $true
+$form.Controls.Add($txtRefImage)
+
+$btnBrowseRef = New-Object System.Windows.Forms.Button
+$btnBrowseRef.Text = "Browse..."
+$btnBrowseRef.Location = New-Object System.Drawing.Point(360, ($y - 1))
+$btnBrowseRef.Size = New-Object System.Drawing.Size(80, 24)
+$btnBrowseRef.Add_Click({
+    $dialog = New-Object System.Windows.Forms.OpenFileDialog
+    $dialog.Title = "Choose a reference image"
+    $dialog.Filter = "Images (*.png;*.jpg;*.jpeg;*.webp)|*.png;*.jpg;*.jpeg;*.webp"
+    if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        $txtRefImage.Text = $dialog.FileName
+    }
+})
+$form.Controls.Add($btnBrowseRef)
+
+$btnClearRef = New-Object System.Windows.Forms.Button
+$btnClearRef.Text = "Clear"
+$btnClearRef.Location = New-Object System.Drawing.Point(445, ($y - 1))
+$btnClearRef.Size = New-Object System.Drawing.Size(60, 24)
+$btnClearRef.Add_Click({ $txtRefImage.Text = "" })
+$form.Controls.Add($btnClearRef)
+
+$y += 35
 $lblFolder = New-Object System.Windows.Forms.Label
 $lblFolder.Text = "Output folder:"
 $lblFolder.Location = New-Object System.Drawing.Point(15, $y)
@@ -274,7 +309,17 @@ function Update-PriceEstimate {
         -f $usd, $krw, $note, $count, $totalUsd, $totalKrw)
 }
 
-function Generate-One($apiKey, $prompt, $model, $aspectRatio, $imageSize, $outPath) {
+function Get-ReferenceImageMimeType($path) {
+    switch ([IO.Path]::GetExtension($path).ToLower()) {
+        ".png"  { return "image/png" }
+        ".jpg"  { return "image/jpeg" }
+        ".jpeg" { return "image/jpeg" }
+        ".webp" { return "image/webp" }
+        default { throw "unsupported reference image extension: $path" }
+    }
+}
+
+function Generate-One($apiKey, $prompt, $model, $aspectRatio, $imageSize, $referenceImagePath, $outPath) {
     $url = "https://generativelanguage.googleapis.com/v1beta/models/$($model):generateContent"
 
     # NOTE: ConvertTo-Json silently collapses single-element arrays (e.g. "contents": [{...}]
@@ -282,9 +327,20 @@ function Generate-One($apiKey, $prompt, $model, $aspectRatio, $imageSize, $outPa
     # hand for the fixed structure and only running the user-supplied prompt through
     # ConvertTo-Json (as a scalar, which is unaffected) avoids that trap entirely.
     $escapedPrompt = $prompt | ConvertTo-Json
+
+    # Base64 only ever produces [A-Za-z0-9+/=], none of which are JSON-special, so it's safe
+    # to splice straight into the hand-built JSON below without extra escaping.
+    $refPartJson = ""
+    if (-not [string]::IsNullOrWhiteSpace($referenceImagePath)) {
+        $mimeType = Get-ReferenceImageMimeType $referenceImagePath
+        $imageBytes = [IO.File]::ReadAllBytes($referenceImagePath)
+        $imageBase64 = [Convert]::ToBase64String($imageBytes)
+        $refPartJson = "{`"inlineData`": {`"mimeType`": `"$mimeType`", `"data`": `"$imageBase64`"}},"
+    }
+
     $body = @"
 {
-  "contents": [{"parts": [{"text": $escapedPrompt}]}],
+  "contents": [{"parts": [$refPartJson{"text": $escapedPrompt}]}],
   "generationConfig": {
     "responseModalities": ["TEXT", "IMAGE"],
     "imageConfig": {"aspectRatio": "$aspectRatio", "imageSize": "$imageSize"}
@@ -387,6 +443,7 @@ $btnGenerate.Add_Click({
     $model = $cmbModel.SelectedItem
     $count = [int]$numCount.Value
     $outputFolder = $txtFolder.Text.Trim()
+    $referenceImagePath = $txtRefImage.Text.Trim()
 
     if ([string]::IsNullOrWhiteSpace($apiKey)) {
         [System.Windows.Forms.MessageBox]::Show("Enter an API key first.", "Missing API key") | Out-Null
@@ -415,6 +472,9 @@ $btnGenerate.Add_Click({
     New-Item -ItemType Directory -Path $batchDir -Force | Out-Null
 
     Write-Log "Output folder: $batchDir"
+    if ($referenceImagePath) {
+        Write-Log "Reference image: $referenceImagePath"
+    }
     Write-Log "Generating $count image(s)..."
 
     $successCount = 0
@@ -422,7 +482,7 @@ $btnGenerate.Add_Click({
         Write-Log "[$i/$count] requesting..."
         $outPath = Join-Path $batchDir ("image-{0:D2}.png" -f $i)
         try {
-            Generate-One $apiKey $prompt $model $aspectRatio $imageSize $outPath
+            Generate-One $apiKey $prompt $model $aspectRatio $imageSize $referenceImagePath $outPath
             Write-Log "[$i/$count] saved: $(Split-Path $outPath -Leaf)"
             $successCount++
         } catch {

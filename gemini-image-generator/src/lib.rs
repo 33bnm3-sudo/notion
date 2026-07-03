@@ -27,18 +27,29 @@ impl Default for ImageOptions {
 }
 
 /// 프롬프트로 이미지를 생성해서 파일로 저장한다. 프롬프트 내용/의도는 호출하는 쪽 책임이다.
+/// `reference_images`가 비어있지 않으면 텍스트 프롬프트 앞에 함께 실어 보내서, 웹 UI에서
+/// "이 이미지 참고해서/이걸 수정해서 만들어줘" 하는 것과 같은 이미지 편집/참조 생성을 할 수 있다.
 pub fn generate_image(
     api_key: &str,
     prompt: &str,
+    reference_images: &[&Path],
     options: &ImageOptions,
     output_path: &Path,
 ) -> Result<(), String> {
     let url = format!("{API_BASE}/{}:generateContent", options.model);
 
+    let mut parts = Vec::with_capacity(reference_images.len() + 1);
+    for image_path in reference_images {
+        let bytes = fs::read(image_path)
+            .map_err(|e| format!("참고 이미지 읽기 실패({}): {e}", image_path.display()))?;
+        let mime_type = guess_mime_type(image_path)?;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        parts.push(json!({ "inlineData": { "mimeType": mime_type, "data": encoded } }));
+    }
+    parts.push(json!({ "text": prompt }));
+
     let body = json!({
-        "contents": [{
-            "parts": [{ "text": prompt }]
-        }],
+        "contents": [{ "parts": parts }],
         "generationConfig": {
             "responseModalities": ["TEXT", "IMAGE"],
             "imageConfig": {
@@ -66,6 +77,23 @@ pub fn generate_image(
     fs::write(output_path, image_bytes).map_err(|e| format!("이미지 저장 실패: {e}"))?;
 
     Ok(())
+}
+
+fn guess_mime_type(path: &Path) -> Result<&'static str, String> {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase())
+        .as_deref()
+    {
+        Some("png") => Ok("image/png"),
+        Some("jpg") | Some("jpeg") => Ok("image/jpeg"),
+        Some("webp") => Ok("image/webp"),
+        _ => Err(format!(
+            "지원하지 않는 참고 이미지 확장자: {}",
+            path.display()
+        )),
+    }
 }
 
 /// generateContent 응답 JSON에서 이미지 바이트를 뽑아낸다. HTTP 상태와 파싱된 바디를 받아
@@ -178,5 +206,14 @@ mod tests {
 
         let err = extract_image_bytes(200, &response).unwrap_err();
         assert!(err.contains("PROHIBITED_CONTENT"));
+    }
+
+    #[test]
+    fn guesses_mime_type_from_extension() {
+        assert_eq!(guess_mime_type(Path::new("logo.PNG")).unwrap(), "image/png");
+        assert_eq!(guess_mime_type(Path::new("shirt.jpg")).unwrap(), "image/jpeg");
+        assert_eq!(guess_mime_type(Path::new("shirt.jpeg")).unwrap(), "image/jpeg");
+        assert_eq!(guess_mime_type(Path::new("photo.webp")).unwrap(), "image/webp");
+        assert!(guess_mime_type(Path::new("scan.tiff")).is_err());
     }
 }

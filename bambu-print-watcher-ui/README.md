@@ -11,9 +11,11 @@
 
 1. 이 리포를 본인 컴퓨터에 `git pull`
 2. `bambu-print-watcher-ui` 폴더의 `run.bat` 더블클릭
-3. Printer IP / Serial number / Access code 입력 (찾는 법은 `bambu-print-watcher/README.md` 참고)
-4. **Start Watching** 클릭 → 새 콘솔 창이 뜨고 거기서 실시간 로그가 보임
-5. 멈추고 싶으면 그 콘솔 창을 닫거나 Ctrl+C
+3. **Scan (5s)** 클릭 → 같은 네트워크에 있는 프린터들이 자동으로 목록에 뜸 (5초 걸림). 여러 대면 다 뜨니 그중 하나 선택 → IP/시리얼 자동 입력됨
+   - 안 뜨면 IP/Serial number 칸에 직접 입력해도 됩니다 (다른 네트워크/VLAN에 있으면 자동 검색이 안 됨)
+4. **Access code**는 자동 검색이 안 되니 프린터 화면에서 보고 직접 입력 (`bambu-print-watcher/README.md` 참고)
+5. **Start Watching** 클릭 → 새 콘솔 창이 뜨고 거기서 실시간 로그가 보임
+6. 멈추고 싶으면 그 콘솔 창을 닫거나 Ctrl+C
 
 입력한 값은 `%APPDATA%\BambuPrintWatcher\config.json`에 저장돼서 다음에 켤 때 그대로 불러옵니다.
 

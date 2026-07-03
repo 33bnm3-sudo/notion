@@ -13,6 +13,7 @@ Add-Type -AssemblyName System.Drawing
 
 $WatcherDir = Join-Path (Split-Path $PSScriptRoot -Parent) "bambu-print-watcher"
 $WatcherScript = Join-Path $WatcherDir "watch.py"
+$DiscoverScript = Join-Path $WatcherDir "discover.py"
 
 $ConfigDir = Join-Path $env:APPDATA "BambuPrintWatcher"
 $ConfigPath = Join-Path $ConfigDir "config.json"
@@ -38,7 +39,7 @@ $HasPython = [bool](Get-Command python -ErrorAction SilentlyContinue)
 # ---- Form ----
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Bambu Print Watcher"
-$form.Size = New-Object System.Drawing.Size(480, 320)
+$form.Size = New-Object System.Drawing.Size(480, 400)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -64,6 +65,68 @@ if (-not (Test-Path $WatcherScript)) {
     $y += 30
 }
 
+$lblDiscovered = New-Object System.Windows.Forms.Label
+$lblDiscovered.Text = "Discovered printers:"
+$lblDiscovered.Location = New-Object System.Drawing.Point(15, $y)
+$lblDiscovered.AutoSize = $true
+$form.Controls.Add($lblDiscovered)
+
+$cmbDiscovered = New-Object System.Windows.Forms.ComboBox
+$cmbDiscovered.Location = New-Object System.Drawing.Point(150, ($y - 3))
+$cmbDiscovered.Size = New-Object System.Drawing.Size(200, 24)
+$cmbDiscovered.DropDownStyle = "DropDownList"
+$form.Controls.Add($cmbDiscovered)
+
+$btnScan = New-Object System.Windows.Forms.Button
+$btnScan.Text = "Scan (5s)"
+$btnScan.Location = New-Object System.Drawing.Point(360, ($y - 4))
+$btnScan.Size = New-Object System.Drawing.Size(90, 26)
+$btnScan.Enabled = $HasPython
+$form.Controls.Add($btnScan)
+
+$script:DiscoveredPrinters = @()
+
+$btnScan.Add_Click({
+    $btnScan.Enabled = $false
+    $btnScan.Text = "Scanning..."
+    $cmbDiscovered.Items.Clear()
+    [System.Windows.Forms.Application]::DoEvents()
+
+    try {
+        $json = & python $DiscoverScript --timeout 5 2>$null | Select-Object -Last 1
+        $printers = $json | ConvertFrom-Json
+    } catch {
+        $printers = @()
+    }
+
+    $script:DiscoveredPrinters = @($printers)
+    if ($script:DiscoveredPrinters.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "No printers found in 5 seconds. Same WiFi/router required (won't cross VLANs or guest networks). You can still type IP/serial in manually below.",
+            "No printers found"
+        ) | Out-Null
+    } else {
+        foreach ($p in $script:DiscoveredPrinters) {
+            $label = "$($p.name) ($($p.model)) - $($p.ip)"
+            $cmbDiscovered.Items.Add($label) | Out-Null
+        }
+        $cmbDiscovered.SelectedIndex = 0
+    }
+
+    $btnScan.Text = "Scan (5s)"
+    $btnScan.Enabled = $true
+})
+
+$cmbDiscovered.Add_SelectedIndexChanged({
+    $i = $cmbDiscovered.SelectedIndex
+    if ($i -ge 0 -and $i -lt $script:DiscoveredPrinters.Count) {
+        $p = $script:DiscoveredPrinters[$i]
+        $txtIp.Text = $p.ip
+        $txtSerial.Text = $p.serial
+    }
+})
+
+$y += 35
 $lblIp = New-Object System.Windows.Forms.Label
 $lblIp.Text = "Printer IP:"
 $lblIp.Location = New-Object System.Drawing.Point(15, $y)

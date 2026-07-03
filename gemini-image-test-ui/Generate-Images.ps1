@@ -174,13 +174,21 @@ $lblModel.Location = New-Object System.Drawing.Point(15, $y)
 $lblModel.AutoSize = $true
 $form.Controls.Add($lblModel)
 
+$DefaultModels = @("gemini-3.1-flash-image", "gemini-3.1-flash-lite-image")
+
 $cmbModel = New-Object System.Windows.Forms.ComboBox
 $cmbModel.Location = New-Object System.Drawing.Point(150, ($y - 3))
-$cmbModel.Size = New-Object System.Drawing.Size(260, 24)
+$cmbModel.Size = New-Object System.Drawing.Size(280, 24)
 $cmbModel.DropDownStyle = "DropDownList"
-@("gemini-3.1-flash-image", "gemini-3.1-flash-lite-image") | ForEach-Object { $cmbModel.Items.Add($_) | Out-Null }
-$cmbModel.SelectedItem = if ($saved -and $saved.model) { $saved.model } else { "gemini-3.1-flash-image" }
+$DefaultModels | ForEach-Object { $cmbModel.Items.Add($_) | Out-Null }
+$cmbModel.SelectedItem = if ($saved -and $saved.model) { $saved.model } else { $DefaultModels[0] }
 $form.Controls.Add($cmbModel)
+
+$btnRefreshModels = New-Object System.Windows.Forms.Button
+$btnRefreshModels.Text = "Refresh list"
+$btnRefreshModels.Location = New-Object System.Drawing.Point(440, ($y - 4))
+$btnRefreshModels.Size = New-Object System.Drawing.Size(90, 26)
+$form.Controls.Add($btnRefreshModels)
 
 $y += 40
 $btnGenerate = New-Object System.Windows.Forms.Button
@@ -246,6 +254,63 @@ function Generate-One($apiKey, $prompt, $model, $aspectRatio, $imageSize, $outPa
     $bytes = [Convert]::FromBase64String($imagePart.inlineData.data)
     [IO.File]::WriteAllBytes($outPath, $bytes)
 }
+
+# Asks Gemini's own ListModels endpoint what this API key can actually see, instead of
+# keeping a hardcoded model list that goes stale whenever Google ships a new model or
+# retires an old one. Filters to models that (a) support generateContent and (b) look like
+# image-output models by name (Google's own image models all have "image" in the model id,
+# e.g. gemini-3.1-flash-image; plain Imagen models use a separate :predict API, not
+# generateContent, so they're naturally excluded by the generateContent check).
+function Get-ImageModels($apiKey) {
+    $names = @()
+    $pageToken = $null
+    do {
+        $url = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=100"
+        if ($pageToken) { $url += "&pageToken=$pageToken" }
+        $response = Invoke-RestMethod -Uri $url -Method Get -Headers @{ "x-goog-api-key" = $apiKey }
+        $imageModels = $response.models | Where-Object {
+            $_.supportedGenerationMethods -contains "generateContent" -and $_.name -match "image"
+        }
+        $names += $imageModels | ForEach-Object { $_.name -replace "^models/", "" }
+        $pageToken = $response.nextPageToken
+    } while ($pageToken)
+
+    return $names | Sort-Object -Unique
+}
+
+function Refresh-ModelList($apiKey) {
+    if ([string]::IsNullOrWhiteSpace($apiKey)) {
+        return
+    }
+    try {
+        $models = Get-ImageModels $apiKey
+        if ($models.Count -eq 0) {
+            Write-Log "Model list refresh: no image-capable models found for this key, keeping defaults."
+            return
+        }
+        $previous = $cmbModel.SelectedItem
+        $cmbModel.Items.Clear()
+        $models | ForEach-Object { $cmbModel.Items.Add($_) | Out-Null }
+        if ($previous -and ($models -contains $previous)) {
+            $cmbModel.SelectedItem = $previous
+        } else {
+            $cmbModel.SelectedIndex = 0
+        }
+        Write-Log "Model list refreshed: $($models -join ', ')"
+    } catch {
+        Write-Log "Model list refresh failed: $($_.Exception.Message)"
+    }
+}
+
+$btnRefreshModels.Add_Click({
+    Refresh-ModelList $txtKey.Text.Trim()
+})
+
+$form.Add_Shown({
+    if ($saved -and $saved.apiKey) {
+        Refresh-ModelList $saved.apiKey
+    }
+})
 
 $btnGenerate.Add_Click({
     $apiKey = $txtKey.Text.Trim()

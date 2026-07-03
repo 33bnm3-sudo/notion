@@ -337,13 +337,10 @@ function Update-PriceEstimate {
     }
 
     $usd = $result.price
-    $krw = [math]::Round($usd * $UsdToKrw)
     $totalUsd = [math]::Round($usd * $count, 3)
     $totalKrw = [math]::Round($usd * $count * $UsdToKrw)
-    $note = if ($result.exact) { "" } else { " (approx, no exact price for this size)" }
 
-    $lblPrice.Text = ("Estimated cost: ~`${0}/image (~{1} KRW){2}  |  total for {3}: ~`${4} (~{5} KRW)" `
-        -f $usd, $krw, $note, $count, $totalUsd, $totalKrw)
+    $lblPrice.Text = "Estimated total cost: ~`${0} (~{1} KRW)" -f $totalUsd, $totalKrw
 }
 
 # Shows every size's price for the currently selected model side by side, so switching

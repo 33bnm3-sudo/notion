@@ -43,6 +43,31 @@ function Save-Config($apiUrl, $apiKey) {
     [PSCustomObject]@{ apiUrl = $apiUrl; apiKey = $apiKey } | ConvertTo-Json | Set-Content -Path $ConfigPath -Encoding UTF8
 }
 
+# Syncthing keeps its API key in its own config.xml, at a well-known default
+# location - read it from there instead of making the user copy it out of the
+# Syncthing web GUI by hand. Only ever reads the LOCAL machine's own
+# Syncthing instance (one API key per instance, covers every folder/device
+# it manages) - there's no way to reach into a phone's separate config.xml
+# from here, nor any need to: this tool only ever talks to the local instance.
+function Find-LocalApiKey {
+    $candidates = @(
+        (Join-Path $env:LOCALAPPDATA "Syncthing\config.xml"),
+        (Join-Path $env:APPDATA "Syncthing\config.xml")
+    )
+    foreach ($path in $candidates) {
+        if (Test-Path $path) {
+            try {
+                [xml]$xml = Get-Content $path -Raw
+                $key = $xml.configuration.gui.apikey
+                if ($key) { return $key }
+            } catch {
+                continue
+            }
+        }
+    }
+    return $null
+}
+
 # ---- Syncthing REST API helpers ----
 # Verified against a real Syncthing instance: GET /rest/system/status (myID),
 # GET /rest/config (folders[].id/label/devices[].deviceID), POST
@@ -169,7 +194,7 @@ if ($Silent) {
 # ---- GUI mode ----
 $saved = Load-Config
 $effectiveApiUrl = if ($ApiUrl) { $ApiUrl } elseif ($saved.apiUrl) { $saved.apiUrl } else { "http://127.0.0.1:8384" }
-$effectiveApiKey = if ($ApiKey) { $ApiKey } else { $saved.apiKey }
+$effectiveApiKey = if ($ApiKey) { $ApiKey } elseif ($saved.apiKey) { $saved.apiKey } else { Find-LocalApiKey }
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Syncthing Sync Trigger"
@@ -201,10 +226,25 @@ $form.Controls.Add($lblKey)
 
 $txtKey = New-Object System.Windows.Forms.TextBox
 $txtKey.Location = New-Object System.Drawing.Point(150, ($y - 3))
-$txtKey.Size = New-Object System.Drawing.Size(340, 24)
+$txtKey.Size = New-Object System.Drawing.Size(260, 24)
 $txtKey.Text = $effectiveApiKey
 $txtKey.UseSystemPasswordChar = $true
 $form.Controls.Add($txtKey)
+
+$btnAutoKey = New-Object System.Windows.Forms.Button
+$btnAutoKey.Text = "Auto-detect"
+$btnAutoKey.Location = New-Object System.Drawing.Point(415, ($y - 4))
+$btnAutoKey.Size = New-Object System.Drawing.Size(80, 26)
+$btnAutoKey.Add_Click({
+    $key = Find-LocalApiKey
+    if ($key) {
+        $txtKey.Text = $key
+        $lblStatus.Text = "Found API key in the local Syncthing config."
+    } else {
+        $lblStatus.Text = "Could not find a local Syncthing config.xml - enter the API key manually (Syncthing GUI -> Settings -> General)."
+    }
+})
+$form.Controls.Add($btnAutoKey)
 
 $y += 36
 $btnLoad = New-Object System.Windows.Forms.Button

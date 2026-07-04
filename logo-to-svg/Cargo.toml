@@ -1,0 +1,8 @@
+[package]
+name = "logo-to-svg"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+visioncortex = "0.8.10"
+vtracer = "0.6.5"

@@ -1,15 +1,15 @@
 ﻿<#
 .SYNOPSIS
-    Resume a paused Syncthing device/folders, wait until every folder reaches
-    100% completion, and show a notification. Works two ways:
+    Resume a paused Syncthing device/folders and wait until every folder
+    reaches 100% completion. Works two ways:
 
-    1. GUI (default, no -Silent): enter API URL/key, see each folder's status,
-       click "Sync Now".
+    1. GUI (default, no -Silent): enter API URL/key, see each folder's
+       completion % update live, click a folder's own Sync button.
     2. Silent/CLI, for chaining after another script/task finishes:
          powershell -File Sync-Trigger.ps1 -ApiKey xxx -Silent
-       Runs headless, no window, prints progress to the console, shows a
-       balloon notification at the end, and sets the exit code (0 = fully
-       synced, 1 = timed out, 2 = error) so a calling script can check it.
+       Runs headless, no window, prints progress to the console, and sets
+       the exit code (0 = fully synced, 1 = timed out, 2 = error) so a
+       calling script can check it.
 
     Verified against a real local Syncthing pair (two instances on the same
     host, paired as devices, one folder shared) - not against an actual
@@ -57,9 +57,9 @@ function Invoke-SyncthingApi {
     } catch {
         $status = $_.Exception.Response.StatusCode.value__
         if ($status -eq 403) {
-            throw "API 키가 잘못됐거나 권한이 없습니다 (403)."
+            throw "Invalid or unauthorized API key (403)."
         }
-        throw "Syncthing에 연결하지 못했습니다 ($Path): $($_.Exception.Message)"
+        throw "Could not reach Syncthing ($Path): $($_.Exception.Message)"
     }
 }
 
@@ -140,30 +140,6 @@ function Invoke-SyncAndWait {
     }
 }
 
-function Show-Notification {
-    param([string]$Title, [string]$Text, [System.Windows.Forms.NotifyIcon]$ExistingIcon)
-    $notify = $ExistingIcon
-    $ownIcon = $false
-    if (-not $notify) {
-        $notify = New-Object System.Windows.Forms.NotifyIcon
-        $notify.Icon = [System.Drawing.SystemIcons]::Information
-        $ownIcon = $true
-    }
-    $notify.Visible = $true
-    $notify.BalloonTipTitle = $Title
-    $notify.BalloonTipText = $Text
-    $notify.ShowBalloonTip(8000)
-    if ($ownIcon) {
-        # No message loop is running in -Silent mode; pump a few events so
-        # Windows actually draws the balloon before the script exits.
-        for ($i = 0; $i -lt 20; $i++) {
-            [System.Windows.Forms.Application]::DoEvents()
-            Start-Sleep -Milliseconds 250
-        }
-        $notify.Dispose()
-    }
-}
-
 # ---- Silent / CLI mode ----
 if ($Silent) {
     if ([string]::IsNullOrWhiteSpace($ApiKey)) {
@@ -179,11 +155,9 @@ if ($Silent) {
         }
         if ($result.Success) {
             Write-Host "All folders synced."
-            Show-Notification -Title "Syncthing" -Text "모든 폴더 동기화 완료"
             exit 0
         } else {
             Write-Host "Timed out waiting for sync."
-            Show-Notification -Title "Syncthing" -Text "동기화가 시간 내에 끝나지 않았습니다"
             exit 1
         }
     } catch {
@@ -203,10 +177,6 @@ $form.Size = New-Object System.Drawing.Size(520, 480)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
-
-$notifyIcon = New-Object System.Windows.Forms.NotifyIcon
-$notifyIcon.Icon = [System.Drawing.SystemIcons]::Information
-$form.Add_FormClosing({ $notifyIcon.Dispose() })
 
 $y = 15
 
@@ -292,19 +262,11 @@ $syncTimer.Add_Tick({
         if ($status.Completion -ge 100) {
             Update-FolderRow $entry.PercentLabel $entry.SyncButton 100
             $entry.SyncButton.Text = "Sync"
-            $notifyIcon.Visible = $true
-            $notifyIcon.BalloonTipTitle = "Syncthing"
-            $notifyIcon.BalloonTipText = "$($entry.Folder.label) 동기화 완료"
-            $notifyIcon.ShowBalloonTip(8000)
             $script:activeSyncs.Remove($folderId)
         } elseif ((Get-Date) -ge $entry.Deadline) {
             $entry.PercentLabel.Text = "$($status.Completion)% (timeout)"
             $entry.SyncButton.Enabled = $true
             $entry.SyncButton.Text = "Sync"
-            $notifyIcon.Visible = $true
-            $notifyIcon.BalloonTipTitle = "Syncthing"
-            $notifyIcon.BalloonTipText = "$($entry.Folder.label) 동기화가 시간 내에 끝나지 않았습니다"
-            $notifyIcon.ShowBalloonTip(8000)
             $script:activeSyncs.Remove($folderId)
         } else {
             Update-FolderRow $entry.PercentLabel $entry.SyncButton $status.Completion

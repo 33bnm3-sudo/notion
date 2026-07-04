@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Resume a paused Syncthing device/folders, wait until every folder reaches
     100% completion, and show a notification. Works two ways:

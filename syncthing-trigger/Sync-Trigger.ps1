@@ -250,7 +250,7 @@ if (-not $syncthingInstalled) {
     $btnInstall.Text = "Install Syncthing"
     $btnInstall.Location = New-Object System.Drawing.Point(15, $y)
     $btnInstall.Size = New-Object System.Drawing.Size(150, 28)
-    $btnInstall.Add_Click({ Start-Process "https://syncthing.net/downloads/windows/" })
+    $btnInstall.Add_Click({ Start-Process "https://syncthing.net/downloads/" })
     $form.Controls.Add($btnInstall)
 
     $btnRecheck = New-Object System.Windows.Forms.Button

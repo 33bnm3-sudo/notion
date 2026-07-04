@@ -78,6 +78,22 @@ function Resume-AllDevices {
     Invoke-SyncthingApi -Method POST -Path "/rest/system/resume" -ApiUrl $ApiUrl -ApiKey $ApiKey | Out-Null
 }
 
+function Resume-Device {
+    param([string]$ApiUrl, [string]$ApiKey, [string]$DeviceId)
+    Invoke-SyncthingApi -Method POST -Path "/rest/system/resume?device=$DeviceId" -ApiUrl $ApiUrl -ApiKey $ApiKey | Out-Null
+}
+
+# Resumes only the devices that share this specific folder, instead of every
+# device Syncthing knows about - so triggering one folder's sync doesn't wake
+# up an unrelated phone that happens to be paused for a different folder.
+function Resume-FolderDevices {
+    param([string]$ApiUrl, [string]$ApiKey, $Folder, [string]$MyId)
+    $remotes = @($Folder.devices | Where-Object { $_.deviceID -ne $MyId })
+    foreach ($d in $remotes) {
+        Resume-Device -ApiUrl $ApiUrl -ApiKey $ApiKey -DeviceId $d.deviceID
+    }
+}
+
 # A folder can be shared with several devices (several phones). It only
 # counts as "done" once every one of them has fully caught up, so we take the
 # minimum completion across all remote devices sharing that folder.
@@ -227,31 +243,15 @@ $btnLoad.Location = New-Object System.Drawing.Point(15, $y)
 $btnLoad.Size = New-Object System.Drawing.Size(150, 28)
 $form.Controls.Add($btnLoad)
 
-$btnSync = New-Object System.Windows.Forms.Button
-$btnSync.Text = "Sync Now"
-$btnSync.Location = New-Object System.Drawing.Point(175, $y)
-$btnSync.Size = New-Object System.Drawing.Size(150, 28)
-$btnSync.Enabled = $false
-$form.Controls.Add($btnSync)
-
-$lblOverall = New-Object System.Windows.Forms.Label
-$lblOverall.Text = ""
-$lblOverall.Location = New-Object System.Drawing.Point(335, ($y + 6))
-$lblOverall.AutoSize = $true
-$form.Controls.Add($lblOverall)
-
 $y += 40
-$listView = New-Object System.Windows.Forms.ListView
-$listView.Location = New-Object System.Drawing.Point(15, $y)
-$listView.Size = New-Object System.Drawing.Size(475, 260)
-$listView.View = "Details"
-$listView.FullRowSelect = $true
-$listView.Columns.Add("Folder", 300) | Out-Null
-$listView.Columns.Add("Completion", 100) | Out-Null
-$listView.Columns.Add("Status", 65) | Out-Null
-$form.Controls.Add($listView)
+$folderPanel = New-Object System.Windows.Forms.Panel
+$folderPanel.Location = New-Object System.Drawing.Point(15, $y)
+$folderPanel.Size = New-Object System.Drawing.Size(475, 300)
+$folderPanel.AutoScroll = $true
+$folderPanel.BorderStyle = "FixedSingle"
+$form.Controls.Add($folderPanel)
 
-$y += 270
+$y += 310
 $lblStatus = New-Object System.Windows.Forms.Label
 $lblStatus.Text = ""
 $lblStatus.Location = New-Object System.Drawing.Point(15, $y)
@@ -259,87 +259,130 @@ $lblStatus.Size = New-Object System.Drawing.Size(475, 40)
 $lblStatus.ForeColor = [System.Drawing.Color]::Firebrick
 $form.Controls.Add($lblStatus)
 
+# folder.id -> @{ Deadline; PercentLabel; SyncButton; Folder }, filled in when
+# that folder's Sync button is clicked, drained by $syncTimer as each one
+# finishes (or times out) so several folders can be syncing at once.
+$script:activeSyncs = @{}
 $script:myId = $null
-$script:folders = @()
+$script:apiUrl = ""
+$script:apiKey = ""
 
-function Refresh-List($statuses) {
-    $listView.Items.Clear()
-    $allDone = $true
-    foreach ($s in $statuses) {
-        $item = New-Object System.Windows.Forms.ListViewItem($s.Label)
-        [void]$item.SubItems.Add("$($s.Completion)%")
-        $isDone = $s.Completion -ge 100
-        [void]$item.SubItems.Add($(if ($isDone) { "Synced" } else { "Syncing" }))
-        if (-not $isDone) { $allDone = $false }
-        $listView.Items.Add($item) | Out-Null
+function Update-FolderRow($lblPercent, $btnSync, $completion) {
+    $lblPercent.Text = "$completion%"
+    $isDone = $completion -ge 100
+    $btnSync.Enabled = $isDone
+    $btnSync.Text = if ($isDone) { "Synced" } else { "Syncing..." }
+}
+
+$syncTimer = New-Object System.Windows.Forms.Timer
+$syncTimer.Interval = 3000
+$syncTimer.Add_Tick({
+    foreach ($folderId in @($script:activeSyncs.Keys)) {
+        $entry = $script:activeSyncs[$folderId]
+        try {
+            $status = Get-FolderStatus -ApiUrl $script:apiUrl -ApiKey $script:apiKey -Folder $entry.Folder -MyId $script:myId
+        } catch {
+            $lblStatus.Text = "FAILED ($($entry.Folder.label)): $($_.Exception.Message)"
+            $entry.SyncButton.Enabled = $true
+            $entry.SyncButton.Text = "Sync"
+            $script:activeSyncs.Remove($folderId)
+            continue
+        }
+
+        if ($status.Completion -ge 100) {
+            Update-FolderRow $entry.PercentLabel $entry.SyncButton 100
+            $entry.SyncButton.Text = "Sync"
+            $notifyIcon.Visible = $true
+            $notifyIcon.BalloonTipTitle = "Syncthing"
+            $notifyIcon.BalloonTipText = "$($entry.Folder.label) 동기화 완료"
+            $notifyIcon.ShowBalloonTip(8000)
+            $script:activeSyncs.Remove($folderId)
+        } elseif ((Get-Date) -ge $entry.Deadline) {
+            $entry.PercentLabel.Text = "$($status.Completion)% (timeout)"
+            $entry.SyncButton.Enabled = $true
+            $entry.SyncButton.Text = "Sync"
+            $notifyIcon.Visible = $true
+            $notifyIcon.BalloonTipTitle = "Syncthing"
+            $notifyIcon.BalloonTipText = "$($entry.Folder.label) 동기화가 시간 내에 끝나지 않았습니다"
+            $notifyIcon.ShowBalloonTip(8000)
+            $script:activeSyncs.Remove($folderId)
+        } else {
+            Update-FolderRow $entry.PercentLabel $entry.SyncButton $status.Completion
+        }
     }
-    $lblOverall.Text = if ($allDone) { "All synced" } else { "Syncing..." }
-    return $allDone
+    if ($script:activeSyncs.Count -eq 0) { $syncTimer.Stop() }
+})
+
+function Start-FolderSync($folder, $lblPercent, $btnSync) {
+    try {
+        Resume-FolderDevices -ApiUrl $script:apiUrl -ApiKey $script:apiKey -Folder $folder -MyId $script:myId
+        $btnSync.Enabled = $false
+        $btnSync.Text = "Syncing..."
+        $script:activeSyncs[$folder.id] = @{
+            Deadline    = (Get-Date).AddMinutes($TimeoutMinutes)
+            PercentLabel = $lblPercent
+            SyncButton  = $btnSync
+            Folder      = $folder
+        }
+        if (-not $syncTimer.Enabled) { $syncTimer.Start() }
+    } catch {
+        $lblStatus.Text = "FAILED ($($folder.label)): $($_.Exception.Message)"
+    }
+}
+
+function Build-FolderRows($folders) {
+    $folderPanel.Controls.Clear()
+    $rowY = 5
+    foreach ($folder in $folders) {
+        $lblName = New-Object System.Windows.Forms.Label
+        $lblName.Text = $folder.label
+        $lblName.Location = New-Object System.Drawing.Point(5, ($rowY + 5))
+        $lblName.Size = New-Object System.Drawing.Size(230, 20)
+        $lblName.AutoEllipsis = $true
+        $folderPanel.Controls.Add($lblName)
+
+        $lblPercent = New-Object System.Windows.Forms.Label
+        $lblPercent.Text = "..."
+        $lblPercent.Location = New-Object System.Drawing.Point(240, ($rowY + 5))
+        $lblPercent.Size = New-Object System.Drawing.Size(70, 20)
+        $folderPanel.Controls.Add($lblPercent)
+
+        $btnFolderSync = New-Object System.Windows.Forms.Button
+        $btnFolderSync.Text = "Sync"
+        $btnFolderSync.Location = New-Object System.Drawing.Point(315, $rowY)
+        $btnFolderSync.Size = New-Object System.Drawing.Size(90, 26)
+        $folderPanel.Controls.Add($btnFolderSync)
+
+        # Bind the specific folder/label/button for this row via .Tag instead
+        # of capturing $folder from the loop directly - a script block would
+        # otherwise see whatever $folder happens to be by the time it fires,
+        # which by then is always the last folder in the list.
+        $btnFolderSync.Tag = @{ Folder = $folder; PercentLabel = $lblPercent; Button = $btnFolderSync }
+        $btnFolderSync.Add_Click({
+            $data = $this.Tag
+            Start-FolderSync $data.Folder $data.PercentLabel $data.Button
+        })
+
+        try {
+            $status = Get-FolderStatus -ApiUrl $script:apiUrl -ApiKey $script:apiKey -Folder $folder -MyId $script:myId
+            $lblPercent.Text = "$($status.Completion)%"
+        } catch {
+            $lblPercent.Text = "?"
+        }
+
+        $rowY += 34
+    }
 }
 
 $btnLoad.Add_Click({
     $lblStatus.Text = ""
     try {
-        $apiUrl = $txtUrl.Text.Trim()
-        $apiKey = $txtKey.Text.Trim()
-        Save-Config $apiUrl $apiKey
-        $script:myId = Get-MyDeviceId -ApiUrl $apiUrl -ApiKey $apiKey
-        $script:folders = Get-SyncthingFolders -ApiUrl $apiUrl -ApiKey $apiKey
-        $statuses = @(foreach ($f in $script:folders) { Get-FolderStatus -ApiUrl $apiUrl -ApiKey $apiKey -Folder $f -MyId $script:myId })
-        Refresh-List $statuses | Out-Null
-        $btnSync.Enabled = $true
-    } catch {
-        $lblStatus.Text = "FAILED: $($_.Exception.Message)"
-    }
-})
-
-$syncTimer = New-Object System.Windows.Forms.Timer
-$syncTimer.Interval = 3000
-$script:syncDeadline = $null
-
-$syncTimer.Add_Tick({
-    try {
-        $apiUrl = $txtUrl.Text.Trim()
-        $apiKey = $txtKey.Text.Trim()
-        $statuses = @(foreach ($f in $script:folders) { Get-FolderStatus -ApiUrl $apiUrl -ApiKey $apiKey -Folder $f -MyId $script:myId })
-        $allDone = Refresh-List $statuses
-
-        if ($allDone) {
-            $syncTimer.Stop()
-            $btnSync.Enabled = $true
-            $btnLoad.Enabled = $true
-            $notifyIcon.Visible = $true
-            $notifyIcon.BalloonTipTitle = "Syncthing"
-            $notifyIcon.BalloonTipText = "모든 폴더 동기화 완료"
-            $notifyIcon.ShowBalloonTip(8000)
-        } elseif ((Get-Date) -ge $script:syncDeadline) {
-            $syncTimer.Stop()
-            $btnSync.Enabled = $true
-            $btnLoad.Enabled = $true
-            $lblStatus.Text = "Timed out waiting for sync to finish."
-            $notifyIcon.Visible = $true
-            $notifyIcon.BalloonTipTitle = "Syncthing"
-            $notifyIcon.BalloonTipText = "동기화가 시간 내에 끝나지 않았습니다"
-            $notifyIcon.ShowBalloonTip(8000)
-        }
-    } catch {
-        $syncTimer.Stop()
-        $btnSync.Enabled = $true
-        $btnLoad.Enabled = $true
-        $lblStatus.Text = "FAILED: $($_.Exception.Message)"
-    }
-})
-
-$btnSync.Add_Click({
-    $lblStatus.Text = ""
-    try {
-        $apiUrl = $txtUrl.Text.Trim()
-        $apiKey = $txtKey.Text.Trim()
-        Resume-AllDevices -ApiUrl $apiUrl -ApiKey $apiKey
-        $script:syncDeadline = (Get-Date).AddMinutes($TimeoutMinutes)
-        $btnSync.Enabled = $false
-        $btnLoad.Enabled = $false
-        $syncTimer.Start()
+        $script:apiUrl = $txtUrl.Text.Trim()
+        $script:apiKey = $txtKey.Text.Trim()
+        Save-Config $script:apiUrl $script:apiKey
+        $script:myId = Get-MyDeviceId -ApiUrl $script:apiUrl -ApiKey $script:apiKey
+        $folders = Get-SyncthingFolders -ApiUrl $script:apiUrl -ApiKey $script:apiKey
+        Build-FolderRows $folders
     } catch {
         $lblStatus.Text = "FAILED: $($_.Exception.Message)"
     }

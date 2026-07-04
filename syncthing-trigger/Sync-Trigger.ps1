@@ -68,6 +68,37 @@ function Find-LocalApiKey {
     return $null
 }
 
+# Checks a few well-known spots instead of just PATH, since Syncthing is
+# often installed without ever being added to it: the per-user install dir
+# the official Windows installer/MSI defaults to, the Program Files
+# locations some package managers use, and finally the presence of its
+# config.xml (a machine that's run Syncthing before will have one even if
+# the exe itself got moved or uninstalled oddly).
+function Test-SyncthingInstalled {
+    if (Get-Command syncthing -ErrorAction SilentlyContinue) { return $true }
+
+    # Join-Path throws outright on a $null base, so only build a candidate
+    # from an env var that's actually set (ProgramFiles(x86) in particular
+    # doesn't exist on 32-bit Windows).
+    $candidates = @()
+    if ($env:LOCALAPPDATA) {
+        $candidates += Join-Path $env:LOCALAPPDATA "Programs\syncthing\syncthing.exe"
+        $candidates += Join-Path $env:LOCALAPPDATA "Syncthing\config.xml"
+    }
+    if ($env:ProgramFiles) {
+        $candidates += Join-Path $env:ProgramFiles "Syncthing\syncthing.exe"
+    }
+    $programFilesX86 = ${env:ProgramFiles(x86)}
+    if ($programFilesX86) {
+        $candidates += Join-Path $programFilesX86 "Syncthing\syncthing.exe"
+    }
+
+    foreach ($path in $candidates) {
+        if (Test-Path $path) { return $true }
+    }
+    return $false
+}
+
 # ---- Syncthing REST API helpers ----
 # Verified against a real Syncthing instance: GET /rest/system/status (myID),
 # GET /rest/config (folders[].id/label/devices[].deviceID), POST
@@ -204,6 +235,51 @@ $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
 
 $y = 15
+$syncthingInstalled = Test-SyncthingInstalled
+
+if (-not $syncthingInstalled) {
+    $lblInstallWarning = New-Object System.Windows.Forms.Label
+    $lblInstallWarning.Text = "Syncthing was not found on this computer. Install it, then click Recheck."
+    $lblInstallWarning.Location = New-Object System.Drawing.Point(15, $y)
+    $lblInstallWarning.Size = New-Object System.Drawing.Size(495, 40)
+    $lblInstallWarning.ForeColor = [System.Drawing.Color]::Firebrick
+    $form.Controls.Add($lblInstallWarning)
+    $y += 45
+
+    $btnInstall = New-Object System.Windows.Forms.Button
+    $btnInstall.Text = "Install Syncthing"
+    $btnInstall.Location = New-Object System.Drawing.Point(15, $y)
+    $btnInstall.Size = New-Object System.Drawing.Size(150, 28)
+    $btnInstall.Add_Click({ Start-Process "https://syncthing.net/downloads/windows/" })
+    $form.Controls.Add($btnInstall)
+
+    $btnRecheck = New-Object System.Windows.Forms.Button
+    $btnRecheck.Text = "Recheck"
+    $btnRecheck.Location = New-Object System.Drawing.Point(175, $y)
+    $btnRecheck.Size = New-Object System.Drawing.Size(100, 28)
+    $btnRecheck.Add_Click({
+        if (Test-SyncthingInstalled) {
+            $lblInstallWarning.Text = "Syncthing found."
+            $lblInstallWarning.ForeColor = [System.Drawing.Color]::SeaGreen
+            $btnInstall.Enabled = $false
+            $btnRecheck.Enabled = $false
+            $txtUrl.Enabled = $true
+            $txtKey.Enabled = $true
+            $btnAutoKey.Enabled = $true
+            $btnLoad.Enabled = $true
+            if (-not $txtKey.Text) {
+                $autoKey = Find-LocalApiKey
+                if ($autoKey) { $txtKey.Text = $autoKey }
+            }
+        } else {
+            $lblInstallWarning.Text = "Still not found. Make sure the installer finished, then try Recheck again."
+        }
+    })
+    $form.Controls.Add($btnRecheck)
+
+    $y += 40
+    $form.Height += 85
+}
 
 $lblUrl = New-Object System.Windows.Forms.Label
 $lblUrl.Text = "Syncthing URL:"
@@ -252,6 +328,14 @@ $btnLoad.Text = "Load Folders"
 $btnLoad.Location = New-Object System.Drawing.Point(15, $y)
 $btnLoad.Size = New-Object System.Drawing.Size(150, 28)
 $form.Controls.Add($btnLoad)
+
+# Nothing here is useful until Syncthing itself exists, so everything stays
+# disabled until Test-SyncthingInstalled passes (either now, or later via the
+# Recheck button above).
+$txtUrl.Enabled = $syncthingInstalled
+$txtKey.Enabled = $syncthingInstalled
+$btnAutoKey.Enabled = $syncthingInstalled
+$btnLoad.Enabled = $syncthingInstalled
 
 $y += 40
 $folderPanel = New-Object System.Windows.Forms.Panel

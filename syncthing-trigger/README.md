@@ -7,7 +7,10 @@
 
 ## 필요한 것
 
-- Syncthing이 이미 설치·설정돼서 폰 등 다른 기기와 페어링돼 있어야 합니다.
+- Syncthing이 폰 등 다른 기기와 페어링돼 있어야 합니다. **Syncthing 자체가 설치돼
+  있는지는 창을 열 때 자동으로 확인합니다** — 안 돼 있으면 나머지 입력칸/버튼이
+  전부 비활성화되고, 대신 **Install Syncthing**(공식 다운로드 페이지 열기)과
+  **Recheck** 버튼만 활성화됩니다. 설치 후 Recheck를 누르면 나머지가 풀립니다.
 - **API 키**: 창을 열면 `%LOCALAPPDATA%\Syncthing\config.xml`에서 자동으로 찾아서 채워줍니다.
   (Syncthing을 표준 경로에 설치한 경우 기준. 안 채워지면 **Auto-detect** 버튼을 눌러
   다시 시도하거나, Syncthing 웹 GUI → 설정(Settings) → 일반(General) → API Key에서
@@ -67,6 +70,9 @@ powershell -File Sync-Trigger.ps1 -ApiKey <API키> -Silent
 - `%LOCALAPPDATA%\Syncthing\config.xml` 자동 감지: 실제 Syncthing이 생성한 config.xml에서
   `<gui><apikey>` 값을 정확히 읽어오는 것, 그리고 파일이 없을 때 에러 없이 조용히
   실패(수동 입력으로 넘어감)하는 것 둘 다 확인
+- 설치 여부 확인 로직도 파일 없음/있음 양쪽 다 테스트 — 처음 버전엔 실제 버그가 있었습니다
+  (`ProgramFiles(x86)` 환경변수가 없는 환경에서 곧바로 에러가 나는 문제, 32비트
+  Windows 등에서 재현 가능했을 것). 고쳐서 재검증 완료
 
 다만 GUI 부분(WinForms 창, 폴더 목록)은 이 환경이 리눅스 샌드박스라 실제로
 띄워서 눌러보지는 못했습니다 — REST API를 호출하는 핵심 로직만 별도로 뽑아내서

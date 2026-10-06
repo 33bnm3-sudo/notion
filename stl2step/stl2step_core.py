@@ -145,7 +145,6 @@ def smart_convert(mesh, prog, lo, hi):
 
     bad_vertex = np.zeros(nv, dtype=bool)   # 열린 테두리/비다양체 모서리에 닿은 점
     odd = starts[counts != 2]
-    nonmanifold = int((counts > 2).sum())
     if len(odd):
         bad_keys = ks[odd]
         bad_vertex[bad_keys // nv] = True
@@ -423,10 +422,11 @@ def smart_convert(mesh, prog, lo, hi):
             prog.update(i / nreg_total, detail="(%d / %d)" % (i, nreg_total))
 
     # ---- 5) 셸 -> 솔리드 ----
-    if nonmanifold:
-        # 3개 이상의 면이 한 모서리를 공유하는 메쉬는 솔리드가 될 수 없고, FreeCAD 에서
-        # 셸로 잇는 데 수십 분이 걸린다. 그래서 면 묶음으로 그대로 내보낸다.
-        log("smart: non-manifold edges=%d -> faces exported as a compound" % nonmanifold)
+    if len(odd):
+        # 열린 테두리나 3개 이상의 면이 공유하는 모서리가 있으면 솔리드가 될 수 없다.
+        # 이런 메쉬는 FreeCAD 에서 셸로 잇는 데 수십 분이 걸리므로(3DBenchy: 30개 모서리 때문에
+        # 11분 이상) 면 묶음으로 그대로 내보낸다.
+        log("smart: open/non-manifold edges=%d -> faces exported as a compound" % len(odd))
         log("smart: triangles=%d faces=%d merged_planes=%d" % (nf, len(faces), planes_merged))
         return Part.Compound(faces), nf, len(faces)
 

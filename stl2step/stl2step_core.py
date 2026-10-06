@@ -120,8 +120,8 @@ def smart_convert(mesh, prog, lo, hi):
     P = np.array([(p.x, p.y, p.z) for p in pts], dtype=float)
     F = np.array(fac, dtype=np.int64)
     nv, nf = len(P), len(F)
-    if nf < 4:
-        raise Failed("too few facets")
+    if nf < 1:
+        raise Failed("no facets")
 
     diag = float(np.linalg.norm(P.max(0) - P.min(0)))
     tol = max(diag * DIST_TOL_REL, 1e-12)
@@ -422,6 +422,14 @@ def smart_convert(mesh, prog, lo, hi):
             prog.update(i / nreg_total, detail="(%d / %d)" % (i, nreg_total))
 
     # ---- 5) 셸 -> 솔리드 ----
+    if len(odd):
+        # 열린 테두리나 3개 이상의 면이 공유하는 모서리가 있으면 솔리드가 될 수 없다.
+        # 이런 메쉬는 FreeCAD 에서 셸로 잇는 데 수십 분이 걸리므로(3DBenchy: 30개 모서리 때문에
+        # 11분 이상) 면 묶음으로 그대로 내보낸다.
+        log("smart: open/non-manifold edges=%d -> faces exported as a compound" % len(odd))
+        log("smart: triangles=%d faces=%d merged_planes=%d" % (nf, len(faces), planes_merged))
+        return Part.Compound(faces), nf, len(faces)
+
     prog.stage(*sub(0.8, 0.95), label="면 잇는 중")
     shell = Part.Shell(faces)
     prog.stage(*sub(0.95, 1.0), label="솔리드로 만드는 중")
